@@ -25,8 +25,8 @@ namespace CallansDungeonGenerator
         /// </summary>
         private void OnDrawGizmos()
         {
-            Gizmos.color = Color.green;
-
+            // Green for connected doors, red for available doors.
+            Gizmos.color = IsConnected ? Color.green : Color.red;
             // Draw a line extending outward from the doorway.
             Vector3 start = transform.position;
             Vector3 end = start + transform.forward * 1.5f;

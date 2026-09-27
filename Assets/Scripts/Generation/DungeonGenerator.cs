@@ -14,10 +14,17 @@ namespace CallansDungeonGenerator
         [SerializeField, Min(2)] private int roomCount = 5;
         [SerializeField, Min(1)] private int maxAttempts = 1000;
 
+        [Header("Branch Settings")]
+        [SerializeField, Range(0f, 1f)] private float branchChance = 0.5f;
+        [SerializeField, Min(0)] private int maxBranchRooms = 10;
+        [SerializeField, Min(1)] private int minBranchLength = 2;
+        [SerializeField, Min(1)] private int maxBranchLength = 4;
+
         private readonly List<DungeonRoom> placedRooms = new();
         private readonly RoomPlacer roomPlacer = new();
 
         private int attempts;
+        private int branchRoomsPlaced;
 
         private void Start()
         {
@@ -44,6 +51,7 @@ namespace CallansDungeonGenerator
             // Reset previous generation state.
             Clear();
             attempts = 0;
+            branchRoomsPlaced = 0;
 
             // Instantiate the starting room.
             DungeonRoom firstRoom = Instantiate(
@@ -58,9 +66,15 @@ namespace CallansDungeonGenerator
             // Generate the remaining rooms.
             if (TryGeneratePath(firstRoom))
             {
+                // Preserve the completed main path before generating branches.
+                List<DungeonRoom> mainPath = new(placedRooms);
+
+                // Generate optional branches from available doorways.
+                GenerateBranches(mainPath);
+
                 Debug.Log(
-                    $"Generated {placedRooms.Count} rooms " +
-                    $"in {attempts} placement attempts."
+                    $"Generated {placedRooms.Count} rooms, " +
+                    $"including optional branches."
                 );
 
                 return true;
@@ -173,6 +187,190 @@ namespace CallansDungeonGenerator
                     if (attempts >= maxAttempts)
                         return false;
                 }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Generates branches from available main-path doorways.
+        /// </summary>
+        private void GenerateBranches(List<DungeonRoom> mainPath)
+        {
+            foreach (DungeonRoom room in mainPath)
+            {
+                // Collect the room's unused doorways.
+                List<DungeonDoor> availableDoors = new();
+
+                foreach (DungeonDoor door in room.Doors)
+                {
+                    if (door != null && !door.IsConnected)
+                        availableDoors.Add(door);
+                }
+
+                Shuffle(availableDoors);
+
+                foreach (DungeonDoor door in availableDoors)
+                {
+                    if (branchRoomsPlaced >= maxBranchRooms)
+                        return;
+
+                    // Randomly decide whether to create a branch.
+                    if (Random.value >= branchChance)
+                        continue;
+
+                    // Choose a random target length within our limits.
+                    int branchLength = Random.Range(
+                        minBranchLength,
+                        Mathf.Max(minBranchLength, maxBranchLength) + 1
+                    );
+
+                    GenerateBranch(door, branchLength);
+                }
+            }
+        }
+
+
+        /// <summary>
+        /// Recursively extends a branch, trying alternative doorways if blocked.
+        /// </summary>
+        private bool GenerateBranch(
+            DungeonDoor targetDoor,
+            int roomsRemaining)
+        {
+            // Stop when the branch is complete or we've reached our room limit.
+            if (roomsRemaining <= 0 ||
+                branchRoomsPlaced >= maxBranchRooms ||
+                targetDoor == null ||
+                targetDoor.IsConnected)
+            {
+                return false;
+            }
+
+            // Randomise our room prefabs.
+            List<DungeonRoom> candidates = new(roomPrefabs);
+            Shuffle(candidates);
+
+            foreach (DungeonRoom prefab in candidates)
+            {
+                if (prefab == null)
+                    continue;
+
+                DungeonRoom candidate = Instantiate(
+                    prefab,
+                    Vector3.zero,
+                    Quaternion.identity,
+                    transform
+                );
+
+                // Try each doorway on the candidate.
+                List<DungeonDoor> candidateDoors = new(candidate.Doors);
+                Shuffle(candidateDoors);
+
+                foreach (DungeonDoor candidateDoor in candidateDoors)
+                {
+                    if (candidateDoor == null)
+                        continue;
+
+                    // Attempt to position the candidate.
+                    if (!roomPlacer.TryPlaceRoom(
+                        candidate,
+                        candidateDoor,
+                        targetDoor,
+                        placedRooms))
+                    {
+                        continue;
+                    }
+
+                    // Accept the placement.
+                    candidateDoor.Connect();
+                    targetDoor.Connect();
+
+                    placedRooms.Add(candidate);
+                    branchRoomsPlaced++;
+
+                    // Collect the new room's available continuation doorways.
+                    List<DungeonDoor> continuationDoors = new();
+
+                    foreach (DungeonDoor door in candidate.Doors)
+                    {
+                        if (door != null && !door.IsConnected)
+                            continuationDoors.Add(door);
+                    }
+
+                    Shuffle(continuationDoors);
+
+                    // Try alternative directions until one successfully extends.
+                    foreach (DungeonDoor continuationDoor in continuationDoors)
+                    {
+                        if (GenerateBranch(
+                            continuationDoor,
+                            roomsRemaining - 1))
+                        {
+                            break;
+                        }
+                    }
+
+                    return true;
+                }
+
+                // No doorway worked for this candidate.
+                Destroy(candidate.gameObject);
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Attempts to attach a single branch room to an available doorway.
+        /// </summary>
+        private bool TryPlaceBranchRoom(DungeonDoor targetDoor)
+        {
+            // Randomise the available room prefabs.
+            List<DungeonRoom> candidates = new(roomPrefabs);
+            Shuffle(candidates);
+
+            foreach (DungeonRoom prefab in candidates)
+            {
+                if (prefab == null)
+                    continue;
+
+                // Instantiate a candidate room.
+                DungeonRoom candidate = Instantiate(
+                    prefab,
+                    Vector3.zero,
+                    Quaternion.identity,
+                    transform
+                );
+
+                // Try connecting each of its available doorways.
+                List<DungeonDoor> candidateDoors = new(candidate.Doors);
+                Shuffle(candidateDoors);
+
+                foreach (DungeonDoor candidateDoor in candidateDoors)
+                {
+                    if (candidateDoor == null)
+                        continue;
+
+                    if (!roomPlacer.TryPlaceRoom(
+                        candidate,
+                        candidateDoor,
+                        targetDoor,
+                        placedRooms))
+                    {
+                        continue;
+                    }
+
+                    // Accept the placement and connect both doorways.
+                    candidateDoor.Connect();
+                    targetDoor.Connect();
+                    placedRooms.Add(candidate);
+
+                    return true;
+                }
+
+                // Discard the candidate if none of its doorways fit.
+                Destroy(candidate.gameObject);
             }
 
             return false;
