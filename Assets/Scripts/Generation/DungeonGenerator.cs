@@ -7,13 +7,17 @@ namespace CallansDungeonGenerator
     {
         [Header("Room Prefabs")]
         [SerializeField] private DungeonRoom startRoom;
+        [SerializeField] private DungeonRoom endRoom;
         [SerializeField] private List<DungeonRoom> roomPrefabs;
 
         [Header("Generation Settings")]
-        [SerializeField] private int roomCount = 5;
+        [SerializeField, Min(2)] private int roomCount = 5;
+        [SerializeField, Min(1)] private int maxAttempts = 1000;
 
         private readonly List<DungeonRoom> placedRooms = new();
         private readonly RoomPlacer roomPlacer = new();
+
+        private int attempts;
 
         private void Start()
         {
@@ -21,71 +25,98 @@ namespace CallansDungeonGenerator
         }
 
         /// <summary>
-        /// Generates a dungeon by extending a path from the starting room.
+        /// Generates a complete main path using recursive backtracking.
         /// </summary>
-        public void Generate()
+        public bool Generate()
         {
-            // Validate our configuration.
-            if (startRoom == null || roomPrefabs.Count == 0 || roomCount < 1)
+            // Validate configuration.
+            if (startRoom == null ||
+                endRoom == null ||
+                roomPrefabs == null ||
+                roomPrefabs.Count == 0 ||
+                roomCount < 2 ||
+                maxAttempts < 1)
             {
                 Debug.LogError("Invalid dungeon configuration.");
-                return;
+                return false;
             }
 
+            // Reset previous generation state.
+            Clear();
+            attempts = 0;
+
             // Instantiate the starting room.
-            DungeonRoom currentRoom = Instantiate(
+            DungeonRoom firstRoom = Instantiate(
                 startRoom,
                 transform.position,
                 Quaternion.identity,
                 transform
             );
 
-            placedRooms.Add(currentRoom);
+            placedRooms.Add(firstRoom);
 
-            // Extend the path until we've reached our target room count.
-            while (placedRooms.Count < roomCount)
+            // Generate the remaining rooms.
+            if (TryGeneratePath(firstRoom))
             {
-                if (!TryPlaceNextRoom(currentRoom, out DungeonRoom nextRoom))
-                {
-                    Debug.LogWarning("Could not place another room.");
-                    break;
-                }
+                Debug.Log(
+                    $"Generated {placedRooms.Count} rooms " +
+                    $"in {attempts} placement attempts."
+                );
 
-                placedRooms.Add(nextRoom);
-                currentRoom = nextRoom;
+                return true;
             }
+
+            Debug.LogWarning(
+                $"Dungeon generation failed after {attempts} attempts."
+            );
+
+            Clear();
+            return false;
         }
 
         /// <summary>
-        /// Attempts to connect a randomly selected room to the previous room.
+        /// Recursively extends the main path and backtracks when necessary.
         /// </summary>
-        private bool TryPlaceNextRoom(
-            DungeonRoom previousRoom,
-            out DungeonRoom nextRoom)
+        private bool TryGeneratePath(DungeonRoom previousRoom)
         {
-            nextRoom = null;
+            // Stop when we've generated the requested number of rooms.
+            if (placedRooms.Count >= roomCount)
+                return true;
 
-            // Collect the previous room's available doorways.
+            if (attempts >= maxAttempts)
+                return false;
+
+            // Collect and randomise the available doorways.
             List<DungeonDoor> availableDoors = new();
 
             foreach (DungeonDoor door in previousRoom.Doors)
             {
-                if (!door.IsConnected)
+                if (door != null && !door.IsConnected)
                     availableDoors.Add(door);
             }
 
-            // Try available doorways in a random order.
             Shuffle(availableDoors);
 
             foreach (DungeonDoor targetDoor in availableDoors)
             {
-                // Try our room prefabs in a random order.
-                List<DungeonRoom> candidates = new(roomPrefabs);
+                // Use the ending room when placing the final room.
+                bool isLastRoom = placedRooms.Count == roomCount - 1;
+
+                List<DungeonRoom> candidates = isLastRoom
+                    ? new List<DungeonRoom> { endRoom }
+                    : new List<DungeonRoom>(roomPrefabs);
+
                 Shuffle(candidates);
 
                 foreach (DungeonRoom prefab in candidates)
                 {
-                    // Create a candidate room.
+                    if (attempts >= maxAttempts)
+                        return false;
+
+                    if (prefab == null)
+                        continue;
+
+                    // Instantiate a candidate and randomise its doorways.
                     DungeonRoom candidate = Instantiate(
                         prefab,
                         Vector3.zero,
@@ -93,12 +124,20 @@ namespace CallansDungeonGenerator
                         transform
                     );
 
-                    // Try each of the candidate's doorways.
                     List<DungeonDoor> candidateDoors = new(candidate.Doors);
                     Shuffle(candidateDoors);
 
                     foreach (DungeonDoor candidateDoor in candidateDoors)
                     {
+                        if (attempts >= maxAttempts)
+                            break;
+
+                        if (candidateDoor == null)
+                            continue;
+
+                        attempts++;
+
+                        // Attempt to align the candidate without overlaps.
                         if (!roomPlacer.TryPlaceRoom(
                             candidate,
                             candidateDoor,
@@ -108,16 +147,31 @@ namespace CallansDungeonGenerator
                             continue;
                         }
 
-                        // Accept the placement and connect both doorways.
+                        // Temporarily accept the placement.
                         candidateDoor.Connect();
                         targetDoor.Connect();
+                        placedRooms.Add(candidate);
 
-                        nextRoom = candidate;
-                        return true;
+                        // Attempt to complete the remaining path.
+                        if (TryGeneratePath(candidate))
+                            return true;
+
+                        // Backtrack if the remaining path cannot be completed.
+                        placedRooms.Remove(candidate);
+                        candidateDoor.Disconnect();
+                        targetDoor.Disconnect();
+
+                        candidate.transform.SetPositionAndRotation(
+                            Vector3.zero,
+                            Quaternion.identity
+                        );
                     }
 
-                    // None of this candidate's doorways produced a valid placement.
+                    // Discard unsuccessful candidates.
                     Destroy(candidate.gameObject);
+
+                    if (attempts >= maxAttempts)
+                        return false;
                 }
             }
 
@@ -125,7 +179,21 @@ namespace CallansDungeonGenerator
         }
 
         /// <summary>
-        /// Randomizes the order of elements in a list.
+        /// Removes all previously generated rooms.
+        /// </summary>
+        private void Clear()
+        {
+            foreach (DungeonRoom room in placedRooms)
+            {
+                if (room != null)
+                    Destroy(room.gameObject);
+            }
+
+            placedRooms.Clear();
+        }
+
+        /// <summary>
+        /// Randomises the order of elements in a list.
         /// </summary>
         private void Shuffle<T>(List<T> items)
         {
