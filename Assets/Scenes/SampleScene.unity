@@ -470,10 +470,13 @@ MonoBehaviour:
   - {fileID: 619528196208065927, guid: 10c86548117824ffea574f20ee1654a5, type: 3}
   roomCount: 10
   maxAttempts: 1000
-  branchChance: 0.5
+  branchChance: 1
   maxBranchRooms: 20
   minBranchLength: 2
   maxBranchLength: 4
+  maxBranchDepth: 2
+  childBranchChance: 0.8
+  maxChildBranchesPerBranch: 2
   generateOnStart: 0
   recorder: {fileID: 2095877272}
 --- !u!4 &2095877271

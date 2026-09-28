@@ -19,6 +19,14 @@ namespace CallansDungeonGenerator
         [SerializeField, Min(0)] private int maxBranchRooms = 10;
         [SerializeField, Min(1)] private int minBranchLength = 2;
         [SerializeField, Min(1)] private int maxBranchLength = 4;
+        [SerializeField, Min(1)]
+        private int maxBranchDepth = 2;
+
+        [SerializeField, Range(0f, 1f)]
+        private float childBranchChance = 0.4f;
+
+        [SerializeField, Min(0)]
+        private int maxChildBranchesPerBranch = 2;
 
         [Header("Debugging")]
         [SerializeField] private bool generateOnStart = true;
