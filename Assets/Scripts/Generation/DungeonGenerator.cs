@@ -20,15 +20,22 @@ namespace CallansDungeonGenerator
         [SerializeField, Min(1)] private int minBranchLength = 2;
         [SerializeField, Min(1)] private int maxBranchLength = 4;
 
+        [Header("Debugging")]
+        [SerializeField] private bool generateOnStart = true;
+        [SerializeField] private GenerationRecorder recorder;
+
         private readonly List<DungeonRoom> placedRooms = new();
         private readonly RoomPlacer roomPlacer = new();
 
         private int attempts;
         private int branchRoomsPlaced;
 
+        public IReadOnlyList<DungeonRoom> PlacedRooms => placedRooms;
+
         private void Start()
         {
-            Generate();
+            if (generateOnStart)
+                Generate();
         }
 
         /// <summary>
@@ -50,6 +57,8 @@ namespace CallansDungeonGenerator
 
             // Reset previous generation state.
             Clear();
+            recorder?.Clear();
+
             attempts = 0;
             branchRoomsPlaced = 0;
 
@@ -62,6 +71,7 @@ namespace CallansDungeonGenerator
             );
 
             placedRooms.Add(firstRoom);
+            recorder?.RecordPlacement(firstRoom, startRoom);
 
             // Generate the remaining rooms.
             if (TryGeneratePath(firstRoom))
@@ -165,12 +175,15 @@ namespace CallansDungeonGenerator
                         candidateDoor.Connect();
                         targetDoor.Connect();
                         placedRooms.Add(candidate);
+                        recorder?.RecordPlacement(candidate, prefab);
 
                         // Attempt to complete the remaining path.
                         if (TryGeneratePath(candidate))
                             return true;
 
                         // Backtrack if the remaining path cannot be completed.
+                        recorder?.RecordRemoval(candidate);
+
                         placedRooms.Remove(candidate);
                         candidateDoor.Disconnect();
                         targetDoor.Disconnect();
@@ -288,6 +301,7 @@ namespace CallansDungeonGenerator
 
                     placedRooms.Add(candidate);
                     branchRoomsPlaced++;
+                    recorder?.RecordPlacement(candidate, prefab);
 
                     // Collect the new room's available continuation doorways.
                     List<DungeonDoor> continuationDoors = new();
@@ -365,6 +379,7 @@ namespace CallansDungeonGenerator
                     candidateDoor.Connect();
                     targetDoor.Connect();
                     placedRooms.Add(candidate);
+                    recorder?.RecordPlacement(candidate, prefab);
 
                     return true;
                 }
