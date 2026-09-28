@@ -139,7 +139,8 @@ namespace CallansDungeonGenerator
                     replacement,
                     proposal.TargetDoor,
                     rooms,
-                    out List<DungeonDoor> preservedDoors,
+                    out Dictionary<DungeonDoor, DungeonDoor>
+                        preservedConnections,
                     out DungeonDoor additionalDoor))
                 {
                     replacement.gameObject.SetActive(false);
@@ -148,13 +149,24 @@ namespace CallansDungeonGenerator
                     continue;
                 }
 
-                // Preserve the existing doorway connections.
-                foreach (DungeonDoor door in preservedDoors)
-                    door.Connect();
+                // Transfer existing connections to the replacement room.
+                foreach (var connection in preservedConnections)
+                {
+                    DungeonDoor originalDoor = connection.Key;
+                    DungeonDoor replacementDoor = connection.Value;
+
+                    // Remember the original doorway's partner.
+                    DungeonDoor neighbourDoor = originalDoor.ConnectedDoor;
+
+                    // Remove the old connection.
+                    originalDoor.Disconnect();
+
+                    // Establish the replacement connection.
+                    replacementDoor.Connect(neighbourDoor);
+                }
 
                 // Establish the additional connection.
-                additionalDoor.Connect();
-                proposal.TargetDoor.Connect();
+                additionalDoor.Connect(proposal.TargetDoor);
 
                 // Replace the original room in our dungeon collection.
                 int index = rooms.IndexOf(original);
@@ -178,17 +190,17 @@ namespace CallansDungeonGenerator
         }
 
         /// <summary>
-        /// Validates a replacement against the current dungeon layout.
+        /// Validates a replacement and identifies its doorway connections.
         /// </summary>
         private bool ValidateReplacement(
             DungeonRoom original,
             DungeonRoom replacement,
             DungeonDoor targetDoor,
             List<DungeonRoom> rooms,
-            out List<DungeonDoor> preservedDoors,
+            out Dictionary<DungeonDoor, DungeonDoor> preservedConnections,
             out DungeonDoor additionalDoor)
         {
-            preservedDoors = new();
+            preservedConnections = new();
             additionalDoor = null;
 
             if (original == null ||
@@ -200,24 +212,18 @@ namespace CallansDungeonGenerator
                 return false;
             }
 
-            // Collect the original room's existing connections.
-            List<DungeonDoor> originalConnections = new();
-
-            foreach (DungeonDoor door in original.Doors)
+            // Identify the original room's connected doorways.
+            foreach (DungeonDoor originalDoor in original.Doors)
             {
-                if (door != null && door.IsConnected)
-                    originalConnections.Add(door);
-            }
+                if (originalDoor == null || !originalDoor.IsConnected)
+                    continue;
 
-            // Match each existing connection to a replacement doorway.
-            foreach (DungeonDoor originalDoor in originalConnections)
-            {
                 bool foundMatch = false;
 
                 foreach (DungeonDoor replacementDoor in replacement.Doors)
                 {
                     if (replacementDoor == null ||
-                        preservedDoors.Contains(replacementDoor))
+                        preservedConnections.ContainsValue(replacementDoor))
                     {
                         continue;
                     }
@@ -235,18 +241,22 @@ namespace CallansDungeonGenerator
                     if (distance > 0.05f || angle > 5f)
                         continue;
 
-                    preservedDoors.Add(replacementDoor);
+                    // Remember which replacement doorway corresponds
+                    // to this original doorway.
+                    preservedConnections.Add(
+                        originalDoor,
+                        replacementDoor
+                    );
 
                     foundMatch = true;
                     break;
                 }
 
-                // Reject replacements that remove existing connections.
                 if (!foundMatch)
                     return false;
             }
 
-            // Exclude the original room when testing for overlaps.
+            // Validate the replacement's bounds.
             List<DungeonRoom> otherRooms = new(rooms);
             otherRooms.Remove(original);
 
@@ -257,16 +267,20 @@ namespace CallansDungeonGenerator
                 return false;
             }
 
-            // Identify the new doorway that connects to our target.
+            // Find the doorway providing our additional connection.
             foreach (DungeonDoor door in replacement.Doors)
             {
-                if (door == null || preservedDoors.Contains(door))
+                if (door == null ||
+                    preservedConnections.ContainsValue(door))
+                {
                     continue;
+                }
 
                 if (!roomPlacer.DoorsAlign(door, targetDoor))
                     continue;
 
                 additionalDoor = door;
+
                 return true;
             }
 

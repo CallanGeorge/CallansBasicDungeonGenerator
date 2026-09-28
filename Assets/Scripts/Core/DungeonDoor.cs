@@ -4,20 +4,49 @@ namespace CallansDungeonGenerator
 {
     public class DungeonDoor : MonoBehaviour
     {
-        public bool IsConnected { get; private set; }
+        public DungeonDoor ConnectedDoor { get; private set; }
+
+        public bool IsConnected => ConnectedDoor != null;
 
         public Vector3 Position => transform.position;
 
         public Vector3 Forward => transform.forward;
 
-        public void Connect()
+        /// <summary>
+        /// Establishes a connection between two doorways.
+        /// </summary>
+        public bool Connect(DungeonDoor other)
         {
-            IsConnected = true;
+            // Reject invalid or occupied doorways.
+            if (other == null ||
+                other == this ||
+                IsConnected ||
+                other.IsConnected)
+            {
+                return false;
+            }
+
+            // Both doorways reference one another.
+            ConnectedDoor = other;
+            other.ConnectedDoor = this;
+
+            return true;
         }
 
+        /// <summary>
+        /// Disconnects both ends of an existing connection.
+        /// </summary>
         public void Disconnect()
         {
-            IsConnected = false;
+            if (!IsConnected)
+                return;
+
+            DungeonDoor other = ConnectedDoor;
+
+            ConnectedDoor = null;
+
+            if (other != null && other.ConnectedDoor == this)
+                other.ConnectedDoor = null;
         }
 
         /// <summary>
@@ -25,22 +54,22 @@ namespace CallansDungeonGenerator
         /// </summary>
         private void OnDrawGizmos()
         {
-            // Green for connected doors, red for available doors.
             Gizmos.color = IsConnected ? Color.green : Color.red;
-            // Draw a line extending outward from the doorway.
+
             Vector3 start = transform.position;
             Vector3 end = start + transform.forward * 1.5f;
 
             Gizmos.DrawLine(start, end);
 
-            // Draw the arrowhead.
-            Vector3 left = Quaternion.Euler(0, 150, 0) * transform.forward;
-            Vector3 right = Quaternion.Euler(0, -150, 0) * transform.forward;
+            Vector3 left = Quaternion.Euler(0, 150, 0)
+                * transform.forward;
+
+            Vector3 right = Quaternion.Euler(0, -150, 0)
+                * transform.forward;
 
             Gizmos.DrawLine(end, end + left * 0.4f);
             Gizmos.DrawLine(end, end + right * 0.4f);
 
-            // Draw a sphere at the doorway's position.
             Gizmos.DrawSphere(start, 0.15f);
         }
     }

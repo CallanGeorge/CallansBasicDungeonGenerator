@@ -112,21 +112,26 @@ namespace CallansDungeonGenerator
 
                     if (applyRoomUpgrades)
                     {
-                        int upgraded = opportunityDetector.ApplyUpgrades(
-                            placedRooms
-                        );
-
-                        // Reanalyse the dungeon to refresh our debugging results.
-                        if (upgraded > 0)
-                        {
-                            opportunityDetector.Analyze(
-                                placedRooms,
-                                roomPrefabs,
-                                generatedStart,
-                                generatedEnd
-                            );
-                        }
+                        opportunityDetector.ApplyUpgrades(placedRooms);
                     }
+                }
+
+                // Connect all remaining geometrically aligned doorways.
+                int connectionsCreated = ConnectAlignedDoors();
+
+                Debug.Log(
+                    $"Created {connectionsCreated} automatic doorway connections."
+                );
+
+                // Refresh opportunity analysis after all modifications.
+                if (opportunityDetector != null)
+                {
+                    opportunityDetector.Analyze(
+                        placedRooms,
+                        roomPrefabs,
+                        mainPath[0],
+                        mainPath[mainPath.Count - 1]
+                    );
                 }
 
                 Debug.Log(
@@ -218,9 +223,10 @@ namespace CallansDungeonGenerator
                             continue;
                         }
 
-                        // Temporarily accept the placement.
-                        candidateDoor.Connect();
-                        targetDoor.Connect();
+                        // Establish the connection between both rooms.
+                        if (!candidateDoor.Connect(targetDoor))
+                            continue;
+
                         placedRooms.Add(candidate);
                         recorder?.RecordPlacement(candidate, prefab);
 
@@ -232,8 +238,9 @@ namespace CallansDungeonGenerator
                         recorder?.RecordRemoval(candidate);
 
                         placedRooms.Remove(candidate);
+
+                        // Disconnecting one doorway clears both ends.
                         candidateDoor.Disconnect();
-                        targetDoor.Disconnect();
 
                         candidate.transform.SetPositionAndRotation(
                             Vector3.zero,
@@ -374,9 +381,9 @@ namespace CallansDungeonGenerator
                         continue;
                     }
 
-                    // Accept the placement and track this branch's rooms.
-                    candidateDoor.Connect();
-                    targetDoor.Connect();
+                    // Connect the new room to its parent.
+                    if (!candidateDoor.Connect(targetDoor))
+                        continue;
 
                     placedRooms.Add(candidate);
                     branchRooms.Add(candidate);
@@ -474,59 +481,48 @@ namespace CallansDungeonGenerator
         }
 
         /// <summary>
-        /// Attempts to attach a single branch room to an available doorway.
+        /// Connects unused doorways that already align geometrically.
         /// </summary>
-        private bool TryPlaceBranchRoom(DungeonDoor targetDoor)
+        private int ConnectAlignedDoors()
         {
-            // Randomise the available room prefabs.
-            List<DungeonRoom> candidates = new(roomPrefabs);
-            Shuffle(candidates);
+            int connectionsCreated = 0;
 
-            foreach (DungeonRoom prefab in candidates)
+            // Compare every pair of different rooms.
+            for (int i = 0; i < placedRooms.Count; i++)
             {
-                if (prefab == null)
-                    continue;
+                DungeonRoom firstRoom = placedRooms[i];
 
-                // Instantiate a candidate room.
-                DungeonRoom candidate = Instantiate(
-                    prefab,
-                    Vector3.zero,
-                    Quaternion.identity,
-                    transform
-                );
-
-                // Try connecting each of its available doorways.
-                List<DungeonDoor> candidateDoors = new(candidate.Doors);
-                Shuffle(candidateDoors);
-
-                foreach (DungeonDoor candidateDoor in candidateDoors)
+                for (int j = i + 1; j < placedRooms.Count; j++)
                 {
-                    if (candidateDoor == null)
-                        continue;
+                    DungeonRoom secondRoom = placedRooms[j];
 
-                    if (!roomPlacer.TryPlaceRoom(
-                        candidate,
-                        candidateDoor,
-                        targetDoor,
-                        placedRooms))
+                    // Examine their unused doorways.
+                    foreach (DungeonDoor firstDoor in firstRoom.Doors)
                     {
-                        continue;
+                        if (firstDoor == null || firstDoor.IsConnected)
+                            continue;
+
+                        foreach (DungeonDoor secondDoor in secondRoom.Doors)
+                        {
+                            if (!roomPlacer.DoorsAlign(
+                                firstDoor,
+                                secondDoor))
+                            {
+                                continue;
+                            }
+
+                            // Establish the connection.
+                            if (firstDoor.Connect(secondDoor))
+                            {
+                                connectionsCreated++;
+                                break;
+                            }
+                        }
                     }
-
-                    // Accept the placement and connect both doorways.
-                    candidateDoor.Connect();
-                    targetDoor.Connect();
-                    placedRooms.Add(candidate);
-                    recorder?.RecordPlacement(candidate, prefab);
-
-                    return true;
                 }
-
-                // Discard the candidate if none of its doorways fit.
-                Destroy(candidate.gameObject);
             }
 
-            return false;
+            return connectionsCreated;
         }
 
         /// <summary>
