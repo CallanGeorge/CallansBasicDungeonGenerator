@@ -4,104 +4,60 @@ using UnityEngine;
 namespace CallansDungeonGenerator
 {
     /// <summary>
-    /// Identifies possible loop connections in a completed dungeon.
+    /// Detects and applies room upgrades and connects aligned doorways.
     /// </summary>
-    public class DungeonOpportunityDetector : MonoBehaviour
+    public class DungeonOptimiser
     {
-        [Header("Settings")]
-        [SerializeField, Min(0.1f)]
-        private float nearbyDistance = 12f;
-
-        [SerializeField]
-        private bool showGizmos = true;
-
-        private readonly RoomPlacer roomPlacer = new();
-
-        private readonly List<(Vector3, Vector3)> directConnections = new();
-        private readonly List<(Vector3, Vector3)> upgradeConnections = new();
-        private readonly List<(Vector3, Vector3)> nearbyConnections = new();
-
-        [Header("Upgrade Preview")]
-        [SerializeField]
-        private bool showUpgradePreviews = true;
-
-        [SerializeField]
-        private bool showUpgradeConnections = true;
-
+        private readonly IReadOnlyList<DungeonRoom> roomPrefabs;
+        private readonly RoomPlacer roomPlacer;
+        private readonly Transform parent;
         private readonly List<UpgradeProposal> upgradeProposals = new();
 
-        public IReadOnlyList<UpgradeProposal> UpgradeProposals
-            => upgradeProposals;
+        public DungeonOptimiser(
+            IReadOnlyList<DungeonRoom> roomPrefabs,
+            RoomPlacer roomPlacer,
+            Transform parent)
+        {
+            this.roomPrefabs = roomPrefabs;
+            this.roomPlacer = roomPlacer;
+            this.parent = parent;
+        }
 
         /// <summary>
-        /// Analyses a completed dungeon for potential loop connections.
+        /// Detects possible room upgrades in the current dungeon.
         /// </summary>
         public void Analyze(
             IReadOnlyList<DungeonRoom> rooms,
-            IReadOnlyList<DungeonRoom> prefabs,
             DungeonRoom startRoom,
             DungeonRoom endRoom)
         {
-            // Reset previous results.
-            directConnections.Clear();
-            upgradeConnections.Clear();
-            nearbyConnections.Clear();
+            // Reset proposals from the previous analysis pass.
             upgradeProposals.Clear();
 
-            if (rooms == null || prefabs == null)
+            if (rooms == null || roomPrefabs == null)
                 return;
 
-            // Find existing doorway opportunities.
-            FindDoorwayOpportunities(rooms);
-
-            // Evaluate potential room upgrades.
             foreach (DungeonRoom room in rooms)
             {
                 // Never replace our special rooms.
                 if (room == startRoom || room == endRoom)
                     continue;
 
-                UpgradeProposal proposal = FindUpgrade(
-                    room,
-                    rooms,
-                    prefabs
-                );
+                UpgradeProposal proposal = FindUpgrade(room, rooms);
 
                 if (proposal != null)
-                {
                     upgradeProposals.Add(proposal);
-
-                    upgradeConnections.Add((
-                        proposal.NewConnectionPosition,
-                        proposal.TargetDoor.Position
-                    ));
-                }
             }
 
-            // Report our findings.
             Debug.Log(
                 $"DUNGEON OPPORTUNITY REPORT\n" +
                 $"Total rooms: {rooms.Count}\n" +
-                $"Direct connections: {directConnections.Count}\n" +
-                $"Upgradeable rooms: {upgradeProposals.Count}\n" +
-                $"Nearby doorway pairs: {nearbyConnections.Count}"
+                $"Upgradeable rooms: {upgradeProposals.Count}"
             );
-
-            // Report individual upgrade proposals.
-            foreach (UpgradeProposal proposal in upgradeProposals)
-            {
-                Debug.Log(
-                    $"UPGRADE PROPOSAL\n" +
-                    $"Original: {proposal.OriginalRoom.name}\n" +
-                    $"Replacement: {proposal.ReplacementPrefab.name}\n" +
-                    $"Position: {proposal.Position}\n" +
-                    $"Connects to: {proposal.TargetDoor.name}"
-                );
-            }
         }
 
         /// <summary>
-        /// Applies valid room upgrades to an existing dungeon.
+        /// Applies the currently detected upgrades after revalidating each one.
         /// </summary>
         public int ApplyUpgrades(List<DungeonRoom> rooms)
         {
@@ -126,7 +82,7 @@ namespace CallansDungeonGenerator
                 }
 
                 // Create the proposed replacement.
-                DungeonRoom replacement = Instantiate(
+                DungeonRoom replacement = Object.Instantiate(
                     proposal.ReplacementPrefab,
                     proposal.Position,
                     proposal.Rotation,
@@ -144,8 +100,7 @@ namespace CallansDungeonGenerator
                     out DungeonDoor additionalDoor))
                 {
                     replacement.gameObject.SetActive(false);
-                    Destroy(replacement.gameObject);
-
+                    Object.Destroy(replacement.gameObject);
                     continue;
                 }
 
@@ -170,11 +125,10 @@ namespace CallansDungeonGenerator
 
                 // Replace the original room in our dungeon collection.
                 int index = rooms.IndexOf(original);
-
                 rooms[index] = replacement;
 
                 original.gameObject.SetActive(false);
-                Destroy(original.gameObject);
+                Object.Destroy(original.gameObject);
 
                 appliedUpgrades++;
 
@@ -187,6 +141,274 @@ namespace CallansDungeonGenerator
             Debug.Log($"Successfully applied {appliedUpgrades} room upgrades.");
 
             return appliedUpgrades;
+        }
+
+        /// <summary>
+        /// Connects every pair of unused doorways that already align.
+        /// </summary>
+        public int ConnectAlignedDoors(List<DungeonRoom> rooms)
+        {
+            int connectionsCreated = 0;
+
+            // Compare every pair of different rooms.
+            for (int i = 0; i < rooms.Count; i++)
+            {
+                DungeonRoom firstRoom = rooms[i];
+
+                for (int j = i + 1; j < rooms.Count; j++)
+                {
+                    DungeonRoom secondRoom = rooms[j];
+
+                    // Examine their unused doorways.
+                    foreach (DungeonDoor firstDoor in firstRoom.Doors)
+                    {
+                        if (firstDoor == null || firstDoor.IsConnected)
+                            continue;
+
+                        foreach (DungeonDoor secondDoor in secondRoom.Doors)
+                        {
+                            if (!roomPlacer.DoorsAlign(
+                                firstDoor,
+                                secondDoor))
+                            {
+                                continue;
+                            }
+
+                            // Establish the connection.
+                            if (firstDoor.Connect(secondDoor))
+                            {
+                                connectionsCreated++;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return connectionsCreated;
+        }
+
+        /// <summary>
+        /// Finds a replacement that preserves existing connections
+        /// and introduces an additional connection.
+        /// </summary>
+        private UpgradeProposal FindUpgrade(
+            DungeonRoom original,
+            IReadOnlyList<DungeonRoom> rooms)
+        {
+            if (original == null || original.Bounds == null)
+                return null;
+
+            // Collect the connections that must be preserved.
+            List<DungeonDoor> connectedDoors = new();
+
+            foreach (DungeonDoor door in original.Doors)
+            {
+                if (door != null && door.IsConnected)
+                    connectedDoors.Add(door);
+            }
+
+            if (connectedDoors.Count == 0)
+                return null;
+
+            // Exclude the original room from collision checks.
+            List<DungeonRoom> otherRooms = new(rooms);
+            otherRooms.Remove(original);
+
+            foreach (DungeonRoom prefab in roomPrefabs)
+            {
+                if (prefab == null)
+                    continue;
+
+                // Create a temporary replacement.
+                DungeonRoom candidate = Object.Instantiate(
+                    prefab,
+                    Vector3.zero,
+                    Quaternion.identity,
+                    parent
+                );
+
+                // Hide the candidate while evaluating it.
+                foreach (Renderer renderer in
+                         candidate.GetComponentsInChildren<Renderer>())
+                {
+                    renderer.enabled = false;
+                }
+
+                UpgradeProposal proposal = null;
+
+                foreach (DungeonDoor candidateDoor in candidate.Doors)
+                {
+                    if (candidateDoor == null)
+                        continue;
+
+                    // Position the candidate using an existing connection.
+                    AlignReplacement(
+                        candidate,
+                        candidateDoor,
+                        connectedDoors[0]
+                    );
+
+                    // Every existing connection must be preserved.
+                    if (!PreservesConnections(
+                        candidate,
+                        connectedDoors,
+                        out HashSet<DungeonDoor> matchedDoors))
+                    {
+                        continue;
+                    }
+
+                    // Reject replacements that overlap other rooms.
+                    if (roomPlacer.OverlapsExistingRooms(
+                        candidate,
+                        otherRooms))
+                    {
+                        continue;
+                    }
+
+                    // Check whether we can create another connection.
+                    proposal = FindAdditionalConnection(
+                        original,
+                        prefab,
+                        candidate,
+                        matchedDoors,
+                        otherRooms
+                    );
+
+                    if (proposal != null)
+                        break;
+                }
+
+                // Remove our temporary evaluation object.
+                candidate.gameObject.SetActive(false);
+                Object.Destroy(candidate.gameObject);
+
+                if (proposal != null)
+                    return proposal;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Finds an additional valid connection created by a replacement.
+        /// </summary>
+        private UpgradeProposal FindAdditionalConnection(
+            DungeonRoom original,
+            DungeonRoom prefab,
+            DungeonRoom candidate,
+            HashSet<DungeonDoor> matchedDoors,
+            List<DungeonRoom> otherRooms)
+        {
+            foreach (DungeonDoor newDoor in candidate.Doors)
+            {
+                // Ignore doorways preserving existing connections.
+                if (newDoor == null || matchedDoors.Contains(newDoor))
+                    continue;
+
+                foreach (DungeonRoom otherRoom in otherRooms)
+                {
+                    foreach (DungeonDoor targetDoor in otherRoom.Doors)
+                    {
+                        if (!roomPlacer.DoorsAlign(newDoor, targetDoor))
+                            continue;
+
+                        // Save the replacement's exact configuration.
+                        Physics.SyncTransforms();
+
+                        return new UpgradeProposal(
+                            original,
+                            prefab,
+                            candidate.transform.position,
+                            candidate.transform.rotation,
+                            targetDoor
+                        );
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Positions a replacement so one doorway matches an existing doorway.
+        /// </summary>
+        private static void AlignReplacement(
+            DungeonRoom candidate,
+            DungeonDoor candidateDoor,
+            DungeonDoor originalDoor)
+        {
+            // Reset the replacement before evaluating another orientation.
+            candidate.transform.SetPositionAndRotation(
+                Vector3.zero,
+                Quaternion.identity
+            );
+
+            // Replacement doorways must face the same direction.
+            Vector3 current = candidateDoor.Forward;
+            Vector3 desired = originalDoor.Forward;
+
+            current.y = 0;
+            desired.y = 0;
+
+            float angle = Vector3.SignedAngle(
+                current,
+                desired,
+                Vector3.up
+            );
+
+            candidate.transform.Rotate(0, angle, 0, Space.World);
+
+            // Position the replacement's doorway over the original.
+            candidate.transform.position +=
+                originalDoor.Position - candidateDoor.Position;
+        }
+
+        /// <summary>
+        /// Verifies that a replacement preserves every existing connection.
+        /// </summary>
+        private static bool PreservesConnections(
+            DungeonRoom candidate,
+            List<DungeonDoor> originalDoors,
+            out HashSet<DungeonDoor> matchedDoors)
+        {
+            matchedDoors = new();
+
+            foreach (DungeonDoor originalDoor in originalDoors)
+            {
+                bool foundMatch = false;
+
+                foreach (DungeonDoor candidateDoor in candidate.Doors)
+                {
+                    if (candidateDoor == null ||
+                        matchedDoors.Contains(candidateDoor))
+                    {
+                        continue;
+                    }
+
+                    float distance = Vector3.Distance(
+                        originalDoor.Position,
+                        candidateDoor.Position
+                    );
+
+                    float angle = Vector3.Angle(
+                        originalDoor.Forward,
+                        candidateDoor.Forward
+                    );
+
+                    if (distance > 0.05f || angle > 5f)
+                        continue;
+
+                    matchedDoors.Add(candidateDoor);
+                    foundMatch = true;
+                    break;
+                }
+
+                if (!foundMatch)
+                    return false;
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -260,12 +482,8 @@ namespace CallansDungeonGenerator
             List<DungeonRoom> otherRooms = new(rooms);
             otherRooms.Remove(original);
 
-            if (roomPlacer.OverlapsExistingRooms(
-                replacement,
-                otherRooms))
-            {
+            if (roomPlacer.OverlapsExistingRooms(replacement, otherRooms))
                 return false;
-            }
 
             // Find the doorway providing our additional connection.
             foreach (DungeonDoor door in replacement.Doors)
@@ -280,406 +498,22 @@ namespace CallansDungeonGenerator
                     continue;
 
                 additionalDoor = door;
-
                 return true;
             }
 
             return false;
         }
-
-        /// <summary>
-        /// Finds existing doorway pairs that might form connections.
-        /// </summary>
-        private void FindDoorwayOpportunities(
-            IReadOnlyList<DungeonRoom> rooms)
-        {
-            // Compare each pair of rooms exactly once.
-            for (int i = 0; i < rooms.Count; i++)
-            {
-                for (int j = i + 1; j < rooms.Count; j++)
-                {
-                    foreach (DungeonDoor first in rooms[i].Doors)
-                    {
-                        if (first == null || first.IsConnected)
-                            continue;
-
-                        foreach (DungeonDoor second in rooms[j].Doors)
-                        {
-                            if (second == null || second.IsConnected)
-                                continue;
-
-                            // Record doorways that already align.
-                            if (roomPlacer.DoorsAlign(first, second))
-                            {
-                                directConnections.Add((
-                                    first.Position,
-                                    second.Position
-                                ));
-
-                                continue;
-                            }
-
-                            // Identify nearby doorways facing opposite directions.
-                            float distance = Vector3.Distance(
-                                first.Position,
-                                second.Position
-                            );
-
-                            float angle = Vector3.Angle(
-                                first.Forward,
-                                -second.Forward
-                            );
-
-                            if (distance <= nearbyDistance && angle <= 5f)
-                            {
-                                nearbyConnections.Add((
-                                    first.Position,
-                                    second.Position
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        /// <summary>
-        /// Finds a replacement that preserves existing connections
-        /// and introduces an additional connection.
-        /// </summary>
-        private UpgradeProposal FindUpgrade(
-            DungeonRoom original,
-            IReadOnlyList<DungeonRoom> rooms,
-            IReadOnlyList<DungeonRoom> prefabs)
-        {
-            if (original == null || original.Bounds == null)
-                return null;
-
-            // Collect the connections that must be preserved.
-            List<DungeonDoor> connectedDoors = new();
-
-            foreach (DungeonDoor door in original.Doors)
-            {
-                if (door != null && door.IsConnected)
-                    connectedDoors.Add(door);
-            }
-
-            if (connectedDoors.Count == 0)
-                return null;
-
-            // Exclude the original room from collision checks.
-            List<DungeonRoom> otherRooms = new(rooms);
-            otherRooms.Remove(original);
-
-            foreach (DungeonRoom prefab in prefabs)
-            {
-                if (prefab == null)
-                    continue;
-
-                // Create a temporary replacement.
-                DungeonRoom candidate = Instantiate(
-                    prefab,
-                    Vector3.zero,
-                    Quaternion.identity,
-                    transform
-                );
-
-                // Hide the candidate while evaluating it.
-                foreach (Renderer renderer in
-                         candidate.GetComponentsInChildren<Renderer>())
-                {
-                    renderer.enabled = false;
-                }
-
-                UpgradeProposal proposal = null;
-
-                foreach (DungeonDoor candidateDoor in candidate.Doors)
-                {
-                    if (candidateDoor == null)
-                        continue;
-
-                    // Position the candidate using an existing connection.
-                    AlignReplacement(
-                        candidate,
-                        candidateDoor,
-                        connectedDoors[0]
-                    );
-
-                    // Every existing connection must be preserved.
-                    if (!PreservesConnections(
-                        candidate,
-                        connectedDoors,
-                        out HashSet<DungeonDoor> matchedDoors))
-                    {
-                        continue;
-                    }
-
-                    // Reject replacements that overlap other rooms.
-                    if (roomPlacer.OverlapsExistingRooms(
-                        candidate,
-                        otherRooms))
-                    {
-                        continue;
-                    }
-
-                    // Check whether we can create another connection.
-                    proposal = FindAdditionalConnection(
-                        original,
-                        prefab,
-                        candidate,
-                        matchedDoors,
-                        otherRooms
-                    );
-
-                    if (proposal != null)
-                        break;
-                }
-
-                // Remove our temporary evaluation object.
-                candidate.gameObject.SetActive(false);
-                Destroy(candidate.gameObject);
-
-                if (proposal != null)
-                    return proposal;
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// Finds an additional valid connection created by a replacement.
-        /// </summary>
-        private UpgradeProposal FindAdditionalConnection(
-            DungeonRoom original,
-            DungeonRoom prefab,
-            DungeonRoom candidate,
-            HashSet<DungeonDoor> matchedDoors,
-            List<DungeonRoom> otherRooms)
-        {
-            foreach (DungeonDoor newDoor in candidate.Doors)
-            {
-                // Ignore doorways preserving existing connections.
-                if (newDoor == null || matchedDoors.Contains(newDoor))
-                    continue;
-
-                foreach (DungeonRoom otherRoom in otherRooms)
-                {
-                    foreach (DungeonDoor targetDoor in otherRoom.Doors)
-                    {
-                        if (!roomPlacer.DoorsAlign(
-                            newDoor,
-                            targetDoor))
-                        {
-                            continue;
-                        }
-
-                        // Save the replacement's exact configuration.
-                        Physics.SyncTransforms();
-
-                        return new UpgradeProposal(
-                            original,
-                            prefab,
-                            candidate.transform.position,
-                            candidate.transform.rotation,
-                            candidate.Bounds.bounds,
-                            newDoor.Position,
-                            targetDoor
-                        );
-                    }
-                }
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// Positions a replacement so one doorway matches an existing doorway.
-        /// </summary>
-        private void AlignReplacement(
-            DungeonRoom candidate,
-            DungeonDoor candidateDoor,
-            DungeonDoor originalDoor)
-        {
-            // Reset the replacement before evaluating another orientation.
-            candidate.transform.SetPositionAndRotation(
-                Vector3.zero,
-                Quaternion.identity
-            );
-
-            // Replacement doorways must face the SAME direction.
-            Vector3 current = candidateDoor.Forward;
-            Vector3 desired = originalDoor.Forward;
-
-            current.y = 0;
-            desired.y = 0;
-
-            float angle = Vector3.SignedAngle(
-                current,
-                desired,
-                Vector3.up
-            );
-
-            candidate.transform.Rotate(
-                0,
-                angle,
-                0,
-                Space.World
-            );
-
-            // Position the replacement's doorway over the original.
-            candidate.transform.position +=
-                originalDoor.Position - candidateDoor.Position;
-        }
-
-        /// <summary>
-        /// Verifies that a replacement preserves every existing connection.
-        /// </summary>
-        private bool PreservesConnections(
-            DungeonRoom candidate,
-            List<DungeonDoor> originalDoors,
-            out HashSet<DungeonDoor> matchedDoors)
-        {
-            matchedDoors = new();
-
-            foreach (DungeonDoor originalDoor in originalDoors)
-            {
-                bool foundMatch = false;
-
-                foreach (DungeonDoor candidateDoor in candidate.Doors)
-                {
-                    if (matchedDoors.Contains(candidateDoor))
-                        continue;
-
-                    float distance = Vector3.Distance(
-                        originalDoor.Position,
-                        candidateDoor.Position
-                    );
-
-                    float angle = Vector3.Angle(
-                        originalDoor.Forward,
-                        candidateDoor.Forward
-                    );
-
-                    if (distance > 0.05f || angle > 5f)
-                        continue;
-
-                    matchedDoors.Add(candidateDoor);
-                    foundMatch = true;
-                    break;
-                }
-
-                if (!foundMatch)
-                    return false;
-            }
-
-            return true;
-        }
-
-        /// <summary>
-        /// Draws proposed room replacements and their new connections.
-        /// </summary>
-        private void DrawUpgradePreviews()
-        {
-            foreach (UpgradeProposal proposal in upgradeProposals)
-            {
-                if (proposal.OriginalRoom == null)
-                    continue;
-
-                // Draw the proposed replacement's bounds.
-                if (showUpgradePreviews)
-                {
-                    Gizmos.color = Color.yellow;
-
-                    Gizmos.DrawWireCube(
-                        proposal.BoundsCenter,
-                        proposal.BoundsSize
-                    );
-
-                    // Highlight the room being replaced.
-                    Gizmos.color = Color.magenta;
-
-                    Gizmos.DrawSphere(
-                        proposal.OriginalRoom.transform.position,
-                        0.5f
-                    );
-                }
-
-                // Draw the additional connection.
-                if (showUpgradeConnections &&
-                    proposal.TargetDoor != null)
-                {
-                    Gizmos.color = Color.magenta;
-
-                    Gizmos.DrawLine(
-                        proposal.NewConnectionPosition,
-                        proposal.TargetDoor.Position
-                    );
-
-                    Gizmos.DrawSphere(
-                        proposal.NewConnectionPosition,
-                        0.35f
-                    );
-                }
-            }
-        }
-
-        /// <summary>
-        /// Draws detected opportunities in the Scene view.
-        /// </summary>
-        private void OnDrawGizmos()
-        {
-            if (!showGizmos)
-                return;
-
-            // Direct connections.
-            Gizmos.color = Color.green;
-
-            foreach (var connection in directConnections)
-            {
-                Gizmos.DrawSphere(connection.Item1, 0.3f);
-                Gizmos.DrawSphere(connection.Item2, 0.3f);
-            }
-
-            // Connections made possible by room upgrades.
-            DrawUpgradePreviews();
-
-            foreach (var connection in upgradeConnections)
-            {
-                Gizmos.DrawSphere(connection.Item1, 0.4f);
-                Gizmos.DrawLine(
-                    connection.Item1,
-                    connection.Item2
-                );
-            }
-
-            // Nearby doorways that might support connecting corridors.
-            Gizmos.color = Color.cyan;
-
-            foreach (var connection in nearbyConnections)
-            {
-                Gizmos.DrawLine(
-                    connection.Item1,
-                    connection.Item2
-                );
-            }
-        }
     }
 
     /// <summary>
-    /// Describes a potential replacement for an existing room.
+    /// Describes a possible replacement for an existing room.
     /// </summary>
-    public class UpgradeProposal
+    internal class UpgradeProposal
     {
         public DungeonRoom OriginalRoom { get; }
         public DungeonRoom ReplacementPrefab { get; }
-
         public Vector3 Position { get; }
         public Quaternion Rotation { get; }
-
-        public Vector3 BoundsCenter { get; }
-        public Vector3 BoundsSize { get; }
-
-        public Vector3 NewConnectionPosition { get; }
         public DungeonDoor TargetDoor { get; }
 
         public UpgradeProposal(
@@ -687,20 +521,12 @@ namespace CallansDungeonGenerator
             DungeonRoom replacementPrefab,
             Vector3 position,
             Quaternion rotation,
-            Bounds bounds,
-            Vector3 newConnectionPosition,
             DungeonDoor targetDoor)
         {
             OriginalRoom = originalRoom;
             ReplacementPrefab = replacementPrefab;
-
             Position = position;
             Rotation = rotation;
-
-            BoundsCenter = bounds.center;
-            BoundsSize = bounds.size;
-
-            NewConnectionPosition = newConnectionPosition;
             TargetDoor = targetDoor;
         }
     }

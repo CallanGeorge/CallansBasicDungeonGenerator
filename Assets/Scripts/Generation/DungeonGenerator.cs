@@ -28,14 +28,11 @@ namespace CallansDungeonGenerator
         [SerializeField, Min(0)]
         private int maxChildBranchesPerBranch = 2;
 
-        [Header("Debugging")]
+        [Header("Generation Control")]
         [SerializeField] private bool generateOnStart = true;
         [SerializeField] private GenerationRecorder recorder;
 
         [Header("Optimisation")]
-        [SerializeField]
-        private DungeonOpportunityDetector opportunityDetector;
-
         [SerializeField]
         private bool applyRoomUpgrades = true;
 
@@ -44,9 +41,6 @@ namespace CallansDungeonGenerator
 
         private readonly List<DungeonRoom> placedRooms = new();
         private readonly RoomPlacer roomPlacer = new();
-
-        private int attempts;
-        private int branchRoomsPlaced;
 
         public IReadOnlyList<DungeonRoom> PlacedRooms => placedRooms;
 
@@ -57,30 +51,70 @@ namespace CallansDungeonGenerator
         }
 
         /// <summary>
-        /// Generates a complete main path using recursive backtracking.
+        /// Generates a complete dungeon.
         /// </summary>
         public bool Generate()
         {
-            // Validate configuration.
-            if (startRoom == null ||
-                endRoom == null ||
-                roomPrefabs == null ||
-                roomPrefabs.Count == 0 ||
-                roomCount < 2 ||
-                maxAttempts < 1)
+            // Validate the generator's serialized configuration.
+            if (!HasValidConfiguration())
             {
                 Debug.LogError("Invalid dungeon configuration.");
                 return false;
             }
 
-            // Reset previous generation state.
+            // Remove the previous dungeon and reset recorded events.
+            ResetGeneration();
+
+            // Generate the main path from a newly instantiated start room.
+            DungeonRoom firstRoom = CreateStartingRoom();
+            MainPathGenerator mainPathGenerator = CreateMainPathGenerator();
+
+            if (!mainPathGenerator.Generate(firstRoom))
+                return HandleGenerationFailure(mainPathGenerator.Attempts);
+
+            // Preserve the completed main path before generating branches.
+            List<DungeonRoom> mainPath = new(placedRooms);
+
+            // Generate branches, optimise the layout and close unused doors.
+            CreateBranchGenerator().GenerateBranches(mainPath);
+            OptimiseDungeon(mainPath);
+            CloseUnusedDoors();
+
+            Debug.Log(
+                $"Generated {placedRooms.Count} rooms, " +
+                $"including optional branches."
+            );
+
+            return true;
+        }
+
+        /// <summary>
+        /// Returns true when the required generation settings are valid.
+        /// </summary>
+        private bool HasValidConfiguration()
+        {
+            return startRoom != null &&
+                endRoom != null &&
+                roomPrefabs != null &&
+                roomPrefabs.Count > 0 &&
+                roomCount >= 2 &&
+                maxAttempts >= 1;
+        }
+
+        /// <summary>
+        /// Clears all state left by the previous generation pass.
+        /// </summary>
+        private void ResetGeneration()
+        {
             Clear();
             recorder?.Clear();
+        }
 
-            attempts = 0;
-            branchRoomsPlaced = 0;
-
-            // Instantiate the starting room.
+        /// <summary>
+        /// Instantiates and records the dungeon's starting room.
+        /// </summary>
+        private DungeonRoom CreateStartingRoom()
+        {
             DungeonRoom firstRoom = Instantiate(
                 startRoom,
                 transform.position,
@@ -91,444 +125,99 @@ namespace CallansDungeonGenerator
             placedRooms.Add(firstRoom);
             recorder?.RecordPlacement(firstRoom, startRoom);
 
-            // Generate the remaining rooms.
-            if (TryGeneratePath(firstRoom))
-            {
-                // Preserve the completed main path before generating branches.
-                List<DungeonRoom> mainPath = new(placedRooms);
+            return firstRoom;
+        }
 
-                // Generate optional branches from available doorways.
-                GenerateBranches(mainPath);
+        /// <summary>
+        /// Creates the main-path generator with the shared generation state.
+        /// </summary>
+        private MainPathGenerator CreateMainPathGenerator()
+        {
+            return new MainPathGenerator(
+                placedRooms,
+                roomPrefabs,
+                endRoom,
+                roomPlacer,
+                recorder,
+                transform,
+                roomCount,
+                maxAttempts
+            );
+        }
 
-                // Analyse and optimise the completed dungeon.
-                if (opportunityDetector != null)
-                {
-                    DungeonRoom generatedStart = mainPath[0];
-                    DungeonRoom generatedEnd = mainPath[mainPath.Count - 1];
+        /// <summary>
+        /// Creates the branch generator with the configured branch limits.
+        /// </summary>
+        private BranchGenerator CreateBranchGenerator()
+        {
+            return new BranchGenerator(
+                placedRooms,
+                roomPrefabs,
+                roomPlacer,
+                recorder,
+                transform,
+                branchChance,
+                maxBranchRooms,
+                minBranchLength,
+                maxBranchLength,
+                maxBranchDepth,
+                childBranchChance,
+                maxChildBranchesPerBranch
+            );
+        }
 
-                    opportunityDetector.Analyze(
-                        placedRooms,
-                        roomPrefabs,
-                        generatedStart,
-                        generatedEnd
-                    );
+        /// <summary>
+        /// Applies room upgrades and connects geometrically aligned doorways.
+        /// </summary>
+        private void OptimiseDungeon(List<DungeonRoom> mainPath)
+        {
+            // Special rooms are identified from the preserved main path.
+            DungeonRoom generatedStart = mainPath[0];
+            DungeonRoom generatedEnd = mainPath[mainPath.Count - 1];
 
-                    if (applyRoomUpgrades)
-                    {
-                        opportunityDetector.ApplyUpgrades(placedRooms);
-                    }
-                }
+            DungeonOptimiser optimiser = new(
+                roomPrefabs,
+                roomPlacer,
+                transform
+            );
 
-                // Connect all remaining geometrically aligned doorways.
-                int connectionsCreated = ConnectAlignedDoors();
+            // Detect possible replacements before modifying the dungeon.
+            optimiser.Analyze(
+                placedRooms,
+                generatedStart,
+                generatedEnd
+            );
 
-                Debug.Log(
-                    $"Created {connectionsCreated} automatic doorway connections."
-                );
+            if (applyRoomUpgrades)
+                optimiser.ApplyUpgrades(placedRooms);
 
-                // Refresh opportunity analysis after all modifications.
-                if (opportunityDetector != null)
-                {
-                    opportunityDetector.Analyze(
-                        placedRooms,
-                        roomPrefabs,
-                        mainPath[0],
-                        mainPath[mainPath.Count - 1]
-                    );
-                }
+            // Connect all remaining geometrically aligned doorways.
+            int connectionsCreated =
+                optimiser.ConnectAlignedDoors(placedRooms);
 
-                // Close any doorways that remain unused.
-                CloseUnusedDoors();
+            Debug.Log(
+                $"Created {connectionsCreated} automatic doorway connections."
+            );
 
-                Debug.Log(
-                    $"Generated {placedRooms.Count} rooms, " +
-                    $"including optional branches."
-                );
+            // Refresh analysis so it represents the completed dungeon.
+            optimiser.Analyze(
+                placedRooms,
+                generatedStart,
+                generatedEnd
+            );
+        }
 
-                return true;
-            }
-
+        /// <summary>
+        /// Reports unsuccessful generation and removes partial rooms.
+        /// </summary>
+        private bool HandleGenerationFailure(int attempts)
+        {
             Debug.LogWarning(
                 $"Dungeon generation failed after {attempts} attempts."
             );
 
             Clear();
             return false;
-        }
-
-        /// <summary>
-        /// Recursively extends the main path and backtracks when necessary.
-        /// </summary>
-        private bool TryGeneratePath(DungeonRoom previousRoom)
-        {
-            // Stop when we've generated the requested number of rooms.
-            if (placedRooms.Count >= roomCount)
-                return true;
-
-            if (attempts >= maxAttempts)
-                return false;
-
-            // Collect and randomise the available doorways.
-            List<DungeonDoor> availableDoors = new();
-
-            foreach (DungeonDoor door in previousRoom.Doors)
-            {
-                if (door != null && !door.IsConnected)
-                    availableDoors.Add(door);
-            }
-
-            Shuffle(availableDoors);
-
-            foreach (DungeonDoor targetDoor in availableDoors)
-            {
-                // Use the ending room when placing the final room.
-                bool isLastRoom = placedRooms.Count == roomCount - 1;
-
-                List<DungeonRoom> candidates = isLastRoom
-                    ? new List<DungeonRoom> { endRoom }
-                    : new List<DungeonRoom>(roomPrefabs);
-
-                Shuffle(candidates);
-
-                foreach (DungeonRoom prefab in candidates)
-                {
-                    if (attempts >= maxAttempts)
-                        return false;
-
-                    if (prefab == null)
-                        continue;
-
-                    // Instantiate a candidate and randomise its doorways.
-                    DungeonRoom candidate = Instantiate(
-                        prefab,
-                        Vector3.zero,
-                        Quaternion.identity,
-                        transform
-                    );
-
-                    List<DungeonDoor> candidateDoors = new(candidate.Doors);
-                    Shuffle(candidateDoors);
-
-                    foreach (DungeonDoor candidateDoor in candidateDoors)
-                    {
-                        if (attempts >= maxAttempts)
-                            break;
-
-                        if (candidateDoor == null)
-                            continue;
-
-                        attempts++;
-
-                        // Attempt to align the candidate without overlaps.
-                        if (!roomPlacer.TryPlaceRoom(
-                            candidate,
-                            candidateDoor,
-                            targetDoor,
-                            placedRooms))
-                        {
-                            continue;
-                        }
-
-                        // Establish the connection between both rooms.
-                        if (!candidateDoor.Connect(targetDoor))
-                            continue;
-
-                        placedRooms.Add(candidate);
-                        recorder?.RecordPlacement(candidate, prefab);
-
-                        // Attempt to complete the remaining path.
-                        if (TryGeneratePath(candidate))
-                            return true;
-
-                        // Backtrack if the remaining path cannot be completed.
-                        recorder?.RecordRemoval(candidate);
-
-                        placedRooms.Remove(candidate);
-
-                        // Disconnecting one doorway clears both ends.
-                        candidateDoor.Disconnect();
-
-                        candidate.transform.SetPositionAndRotation(
-                            Vector3.zero,
-                            Quaternion.identity
-                        );
-                    }
-
-                    // Discard unsuccessful candidates.
-                    Destroy(candidate.gameObject);
-
-                    if (attempts >= maxAttempts)
-                        return false;
-                }
-            }
-
-            return false;
-        }
-
-        /// <summary>
-        /// Generates branches from available main-path doorways.
-        /// </summary>
-        private void GenerateBranches(List<DungeonRoom> mainPath)
-        {
-            foreach (DungeonRoom room in mainPath)
-            {
-                // Collect the room's unused doorways.
-                List<DungeonDoor> availableDoors = new();
-
-                foreach (DungeonDoor door in room.Doors)
-                {
-                    if (door != null && !door.IsConnected)
-                        availableDoors.Add(door);
-                }
-
-                Shuffle(availableDoors);
-
-                foreach (DungeonDoor door in availableDoors)
-                {
-                    if (branchRoomsPlaced >= maxBranchRooms)
-                        return;
-
-                    // Randomly decide whether to create a branch.
-                    if (Random.value >= branchChance)
-                        continue;
-
-                    // Choose a random target length within our limits.
-                    int branchLength = Random.Range(
-                        minBranchLength,
-                        Mathf.Max(minBranchLength, maxBranchLength) + 1
-                    );
-
-                    GenerateBranch(
-                        door,
-                        branchLength,
-                        depth: 1
-                    );
-                }
-            }
-        }
-
-
-        /// <summary>
-        /// Generates a branch and optionally creates child branches from its rooms.
-        /// </summary>
-        private bool GenerateBranch(
-            DungeonDoor targetDoor,
-            int targetLength,
-            int depth)
-        {
-            // Track the rooms belonging to this particular branch.
-            List<DungeonRoom> branchRooms = new();
-
-            // Generate the branch's rooms.
-            bool success = TryExtendBranch(
-                targetDoor,
-                targetLength,
-                branchRooms
-            );
-
-            if (!success)
-                return false;
-
-            // Attempt child branches if we haven't reached maximum depth.
-            if (depth < maxBranchDepth)
-                GenerateChildBranches(branchRooms, depth);
-
-            return true;
-        }
-
-        /// <summary>
-        /// Recursively extends a branch, trying alternative doorways if blocked.
-        /// </summary>
-        private bool TryExtendBranch(
-            DungeonDoor targetDoor,
-            int roomsRemaining,
-            List<DungeonRoom> branchRooms)
-        {
-            // Stop if the branch is complete or its room budget is exhausted.
-            if (roomsRemaining <= 0 ||
-                branchRoomsPlaced >= maxBranchRooms ||
-                targetDoor == null ||
-                targetDoor.IsConnected)
-            {
-                return false;
-            }
-
-            // Randomise the available room prefabs.
-            List<DungeonRoom> candidates = new(roomPrefabs);
-            Shuffle(candidates);
-
-            foreach (DungeonRoom prefab in candidates)
-            {
-                if (prefab == null)
-                    continue;
-
-                DungeonRoom candidate = Instantiate(
-                    prefab,
-                    Vector3.zero,
-                    Quaternion.identity,
-                    transform
-                );
-
-                // Try the candidate's doorways in random order.
-                List<DungeonDoor> candidateDoors = new(candidate.Doors);
-                Shuffle(candidateDoors);
-
-                foreach (DungeonDoor candidateDoor in candidateDoors)
-                {
-                    if (candidateDoor == null)
-                        continue;
-
-                    if (!roomPlacer.TryPlaceRoom(
-                        candidate,
-                        candidateDoor,
-                        targetDoor,
-                        placedRooms))
-                    {
-                        continue;
-                    }
-
-                    // Connect the new room to its parent.
-                    if (!candidateDoor.Connect(targetDoor))
-                        continue;
-
-                    placedRooms.Add(candidate);
-                    branchRooms.Add(candidate);
-                    branchRoomsPlaced++;
-
-                    recorder?.RecordPlacement(candidate, prefab);
-
-                    // Collect available continuation doorways.
-                    List<DungeonDoor> continuationDoors = new();
-
-                    foreach (DungeonDoor door in candidate.Doors)
-                    {
-                        if (door != null && !door.IsConnected)
-                            continuationDoors.Add(door);
-                    }
-
-                    Shuffle(continuationDoors);
-
-                    // Try extending the branch through alternative doorways.
-                    foreach (DungeonDoor continuationDoor in continuationDoors)
-                    {
-                        if (TryExtendBranch(
-                            continuationDoor,
-                            roomsRemaining - 1,
-                            branchRooms))
-                        {
-                            break;
-                        }
-                    }
-
-                    return true;
-                }
-
-                Destroy(candidate.gameObject);
-            }
-
-            return false;
-        }
-
-        /// <summary>
-        /// Attempts to generate child branches from an existing branch's rooms.
-        /// </summary>
-        private void GenerateChildBranches(
-            List<DungeonRoom> branchRooms,
-            int parentDepth)
-        {
-            int childrenGenerated = 0;
-
-            // Randomise the rooms belonging to this branch.
-            List<DungeonRoom> candidates = new(branchRooms);
-            Shuffle(candidates);
-
-            foreach (DungeonRoom room in candidates)
-            {
-                // Stop when we've reached either generation limit.
-                if (childrenGenerated >= maxChildBranchesPerBranch ||
-                    branchRoomsPlaced >= maxBranchRooms)
-                {
-                    return;
-                }
-
-                // Collect available doorways on this branch room.
-                List<DungeonDoor> availableDoors = new();
-
-                foreach (DungeonDoor door in room.Doors)
-                {
-                    if (door != null && !door.IsConnected)
-                        availableDoors.Add(door);
-                }
-
-                Shuffle(availableDoors);
-
-                foreach (DungeonDoor door in availableDoors)
-                {
-                    if (childrenGenerated >= maxChildBranchesPerBranch ||
-                        branchRoomsPlaced >= maxBranchRooms)
-                    {
-                        return;
-                    }
-
-                    // Randomly decide whether to attempt a child branch.
-                    if (Random.value >= childBranchChance)
-                        continue;
-
-                    int length = Random.Range(
-                        minBranchLength,
-                        Mathf.Max(minBranchLength, maxBranchLength) + 1
-                    );
-
-                    // Generate the child at the next depth.
-                    if (GenerateBranch(door, length, parentDepth + 1))
-                        childrenGenerated++;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Connects unused doorways that already align geometrically.
-        /// </summary>
-        private int ConnectAlignedDoors()
-        {
-            int connectionsCreated = 0;
-
-            // Compare every pair of different rooms.
-            for (int i = 0; i < placedRooms.Count; i++)
-            {
-                DungeonRoom firstRoom = placedRooms[i];
-
-                for (int j = i + 1; j < placedRooms.Count; j++)
-                {
-                    DungeonRoom secondRoom = placedRooms[j];
-
-                    // Examine their unused doorways.
-                    foreach (DungeonDoor firstDoor in firstRoom.Doors)
-                    {
-                        if (firstDoor == null || firstDoor.IsConnected)
-                            continue;
-
-                        foreach (DungeonDoor secondDoor in secondRoom.Doors)
-                        {
-                            if (!roomPlacer.DoorsAlign(
-                                firstDoor,
-                                secondDoor))
-                            {
-                                continue;
-                            }
-
-                            // Establish the connection.
-                            if (firstDoor.Connect(secondDoor))
-                            {
-                                connectionsCreated++;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            return connectionsCreated;
         }
 
         /// <summary>
@@ -570,20 +259,6 @@ namespace CallansDungeonGenerator
             }
 
             placedRooms.Clear();
-        }
-
-        /// <summary>
-        /// Randomises the order of elements in a list.
-        /// </summary>
-        private void Shuffle<T>(List<T> items)
-        {
-            for (int i = items.Count - 1; i > 0; i--)
-            {
-                int randomIndex = Random.Range(0, i + 1);
-
-                (items[i], items[randomIndex]) =
-                    (items[randomIndex], items[i]);
-            }
         }
     }
 }

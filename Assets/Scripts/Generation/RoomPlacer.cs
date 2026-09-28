@@ -8,7 +8,7 @@ namespace CallansDungeonGenerator
         /// <summary>
         /// Aligns two doorways so they share a position and face opposite directions.
         /// </summary>
-        public bool AlignRooms(
+        private bool AlignRooms(
             DungeonRoom newRoom,
             DungeonDoor newDoor,
             DungeonDoor targetDoor)
