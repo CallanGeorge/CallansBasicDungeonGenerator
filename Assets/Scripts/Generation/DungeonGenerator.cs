@@ -39,6 +39,9 @@ namespace CallansDungeonGenerator
         [SerializeField]
         private bool applyRoomUpgrades = true;
 
+        [Header("Doorway Closures")]
+        [SerializeField] private GameObject doorClosurePrefab;
+
         private readonly List<DungeonRoom> placedRooms = new();
         private readonly RoomPlacer roomPlacer = new();
 
@@ -133,6 +136,9 @@ namespace CallansDungeonGenerator
                         mainPath[mainPath.Count - 1]
                     );
                 }
+
+                // Close any doorways that remain unused.
+                CloseUnusedDoors();
 
                 Debug.Log(
                     $"Generated {placedRooms.Count} rooms, " +
@@ -523,6 +529,33 @@ namespace CallansDungeonGenerator
             }
 
             return connectionsCreated;
+        }
+
+        /// <summary>
+        /// Closes every unused doorway in the completed dungeon.
+        /// </summary>
+        private void CloseUnusedDoors()
+        {
+            if (doorClosurePrefab == null)
+                return;
+
+            // Examine every doorway in the completed dungeon.
+            foreach (DungeonRoom room in placedRooms)
+            {
+                foreach (DungeonDoor door in room.Doors)
+                {
+                    if (door == null || door.IsConnected)
+                        continue;
+
+                    // Instantiate the closure using the doorway's transform.
+                    Instantiate(
+                        doorClosurePrefab,
+                        door.Position,
+                        door.transform.rotation,
+                        door.transform
+                    );
+                }
+            }
         }
 
         /// <summary>

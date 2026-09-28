@@ -482,6 +482,7 @@ MonoBehaviour:
   recorder: {fileID: 2095877272}
   opportunityDetector: {fileID: 2095877276}
   applyRoomUpgrades: 1
+  doorClosurePrefab: {fileID: 0}
 --- !u!4 &2095877271
 Transform:
   m_ObjectHideFlags: 0
