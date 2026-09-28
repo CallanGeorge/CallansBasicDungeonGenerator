@@ -32,6 +32,13 @@ namespace CallansDungeonGenerator
         [SerializeField] private bool generateOnStart = true;
         [SerializeField] private GenerationRecorder recorder;
 
+        [Header("Optimisation")]
+        [SerializeField]
+        private DungeonOpportunityDetector opportunityDetector;
+
+        [SerializeField]
+        private bool applyRoomUpgrades = true;
+
         private readonly List<DungeonRoom> placedRooms = new();
         private readonly RoomPlacer roomPlacer = new();
 
@@ -89,6 +96,38 @@ namespace CallansDungeonGenerator
 
                 // Generate optional branches from available doorways.
                 GenerateBranches(mainPath);
+
+                // Analyse and optimise the completed dungeon.
+                if (opportunityDetector != null)
+                {
+                    DungeonRoom generatedStart = mainPath[0];
+                    DungeonRoom generatedEnd = mainPath[mainPath.Count - 1];
+
+                    opportunityDetector.Analyze(
+                        placedRooms,
+                        roomPrefabs,
+                        generatedStart,
+                        generatedEnd
+                    );
+
+                    if (applyRoomUpgrades)
+                    {
+                        int upgraded = opportunityDetector.ApplyUpgrades(
+                            placedRooms
+                        );
+
+                        // Reanalyse the dungeon to refresh our debugging results.
+                        if (upgraded > 0)
+                        {
+                            opportunityDetector.Analyze(
+                                placedRooms,
+                                roomPrefabs,
+                                generatedStart,
+                                generatedEnd
+                            );
+                        }
+                    }
+                }
 
                 Debug.Log(
                     $"Generated {placedRooms.Count} rooms, " +
@@ -246,20 +285,53 @@ namespace CallansDungeonGenerator
                         Mathf.Max(minBranchLength, maxBranchLength) + 1
                     );
 
-                    GenerateBranch(door, branchLength);
+                    GenerateBranch(
+                        door,
+                        branchLength,
+                        depth: 1
+                    );
                 }
             }
         }
 
 
         /// <summary>
-        /// Recursively extends a branch, trying alternative doorways if blocked.
+        /// Generates a branch and optionally creates child branches from its rooms.
         /// </summary>
         private bool GenerateBranch(
             DungeonDoor targetDoor,
-            int roomsRemaining)
+            int targetLength,
+            int depth)
         {
-            // Stop when the branch is complete or we've reached our room limit.
+            // Track the rooms belonging to this particular branch.
+            List<DungeonRoom> branchRooms = new();
+
+            // Generate the branch's rooms.
+            bool success = TryExtendBranch(
+                targetDoor,
+                targetLength,
+                branchRooms
+            );
+
+            if (!success)
+                return false;
+
+            // Attempt child branches if we haven't reached maximum depth.
+            if (depth < maxBranchDepth)
+                GenerateChildBranches(branchRooms, depth);
+
+            return true;
+        }
+
+        /// <summary>
+        /// Recursively extends a branch, trying alternative doorways if blocked.
+        /// </summary>
+        private bool TryExtendBranch(
+            DungeonDoor targetDoor,
+            int roomsRemaining,
+            List<DungeonRoom> branchRooms)
+        {
+            // Stop if the branch is complete or its room budget is exhausted.
             if (roomsRemaining <= 0 ||
                 branchRoomsPlaced >= maxBranchRooms ||
                 targetDoor == null ||
@@ -268,7 +340,7 @@ namespace CallansDungeonGenerator
                 return false;
             }
 
-            // Randomise our room prefabs.
+            // Randomise the available room prefabs.
             List<DungeonRoom> candidates = new(roomPrefabs);
             Shuffle(candidates);
 
@@ -284,7 +356,7 @@ namespace CallansDungeonGenerator
                     transform
                 );
 
-                // Try each doorway on the candidate.
+                // Try the candidate's doorways in random order.
                 List<DungeonDoor> candidateDoors = new(candidate.Doors);
                 Shuffle(candidateDoors);
 
@@ -293,7 +365,6 @@ namespace CallansDungeonGenerator
                     if (candidateDoor == null)
                         continue;
 
-                    // Attempt to position the candidate.
                     if (!roomPlacer.TryPlaceRoom(
                         candidate,
                         candidateDoor,
@@ -303,15 +374,17 @@ namespace CallansDungeonGenerator
                         continue;
                     }
 
-                    // Accept the placement.
+                    // Accept the placement and track this branch's rooms.
                     candidateDoor.Connect();
                     targetDoor.Connect();
 
                     placedRooms.Add(candidate);
+                    branchRooms.Add(candidate);
                     branchRoomsPlaced++;
+
                     recorder?.RecordPlacement(candidate, prefab);
 
-                    // Collect the new room's available continuation doorways.
+                    // Collect available continuation doorways.
                     List<DungeonDoor> continuationDoors = new();
 
                     foreach (DungeonDoor door in candidate.Doors)
@@ -322,12 +395,13 @@ namespace CallansDungeonGenerator
 
                     Shuffle(continuationDoors);
 
-                    // Try alternative directions until one successfully extends.
+                    // Try extending the branch through alternative doorways.
                     foreach (DungeonDoor continuationDoor in continuationDoors)
                     {
-                        if (GenerateBranch(
+                        if (TryExtendBranch(
                             continuationDoor,
-                            roomsRemaining - 1))
+                            roomsRemaining - 1,
+                            branchRooms))
                         {
                             break;
                         }
@@ -336,11 +410,67 @@ namespace CallansDungeonGenerator
                     return true;
                 }
 
-                // No doorway worked for this candidate.
                 Destroy(candidate.gameObject);
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Attempts to generate child branches from an existing branch's rooms.
+        /// </summary>
+        private void GenerateChildBranches(
+            List<DungeonRoom> branchRooms,
+            int parentDepth)
+        {
+            int childrenGenerated = 0;
+
+            // Randomise the rooms belonging to this branch.
+            List<DungeonRoom> candidates = new(branchRooms);
+            Shuffle(candidates);
+
+            foreach (DungeonRoom room in candidates)
+            {
+                // Stop when we've reached either generation limit.
+                if (childrenGenerated >= maxChildBranchesPerBranch ||
+                    branchRoomsPlaced >= maxBranchRooms)
+                {
+                    return;
+                }
+
+                // Collect available doorways on this branch room.
+                List<DungeonDoor> availableDoors = new();
+
+                foreach (DungeonDoor door in room.Doors)
+                {
+                    if (door != null && !door.IsConnected)
+                        availableDoors.Add(door);
+                }
+
+                Shuffle(availableDoors);
+
+                foreach (DungeonDoor door in availableDoors)
+                {
+                    if (childrenGenerated >= maxChildBranchesPerBranch ||
+                        branchRoomsPlaced >= maxBranchRooms)
+                    {
+                        return;
+                    }
+
+                    // Randomly decide whether to attempt a child branch.
+                    if (Random.value >= childBranchChance)
+                        continue;
+
+                    int length = Random.Range(
+                        minBranchLength,
+                        Mathf.Max(minBranchLength, maxBranchLength) + 1
+                    );
+
+                    // Generate the child at the next depth.
+                    if (GenerateBranch(door, length, parentDepth + 1))
+                        childrenGenerated++;
+                }
+            }
         }
 
         /// <summary>

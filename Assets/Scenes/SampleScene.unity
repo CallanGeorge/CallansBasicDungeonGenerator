@@ -443,6 +443,7 @@ GameObject:
   - component: {fileID: 2095877271}
   - component: {fileID: 2095877270}
   - component: {fileID: 2095877272}
+  - component: {fileID: 2095877276}
   m_Layer: 0
   m_Name: Dungeon
   m_TagString: Untagged
@@ -479,6 +480,8 @@ MonoBehaviour:
   maxChildBranchesPerBranch: 2
   generateOnStart: 0
   recorder: {fileID: 2095877272}
+  opportunityDetector: {fileID: 2095877276}
+  applyRoomUpgrades: 1
 --- !u!4 &2095877271
 Transform:
   m_ObjectHideFlags: 0
@@ -506,6 +509,22 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f87e135bbdef4158af0f76894836b0b7, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CallansDungeonGenerator.GenerationRecorder
+--- !u!114 &2095877276
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2095877269}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3af3013a4068549dd8f77f1d048f8457, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Assembly-CSharp::CallansDungeonGenerator.DungeonOpportunityDetector
+  nearbyDistance: 12
+  showGizmos: 1
+  showUpgradePreviews: 1
+  showUpgradeConnections: 1
 --- !u!1 &2095877273
 GameObject:
   m_ObjectHideFlags: 0

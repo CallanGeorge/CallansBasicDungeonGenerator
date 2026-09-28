@@ -114,5 +114,38 @@ namespace CallansDungeonGenerator
 
             return true;
         }
+
+        /// <summary>
+        /// Checks whether two unused doorways share a position
+        /// and face opposite directions.
+        /// </summary>
+        public bool DoorsAlign(
+            DungeonDoor firstDoor,
+            DungeonDoor secondDoor,
+            float positionTolerance = 0.05f,
+            float angleTolerance = 5f)
+        {
+            // Reject missing or occupied doorways.
+            if (firstDoor == null || secondDoor == null ||
+                firstDoor.IsConnected || secondDoor.IsConnected)
+                return false;
+
+            // Check whether both doorways occupy the same position.
+            float distance = Vector3.Distance(
+                firstDoor.Position,
+                secondDoor.Position
+            );
+
+            if (distance > positionTolerance)
+                return false;
+
+            // Check whether both doorways face opposite directions.
+            float angle = Vector3.Angle(
+                firstDoor.Forward,
+                -secondDoor.Forward
+            );
+
+            return angle <= angleTolerance;
+        }
     }
 }
