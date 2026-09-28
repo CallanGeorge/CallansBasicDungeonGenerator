@@ -206,7 +206,7 @@ Transform:
   m_GameObject: {fileID: 330585543}
   serializedVersion: 2
   m_LocalRotation: {x: 0.7071068, y: 0, z: 0, w: 0.7071068}
-  m_LocalPosition: {x: 0, y: 100, z: 0}
+  m_LocalPosition: {x: 0, y: 150, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -470,6 +470,7 @@ MonoBehaviour:
   - {fileID: 6941312296928181552, guid: 63595f50982e7434b93261ea71e328da, type: 3}
   - {fileID: 2154644186932275525, guid: d719dc21002f248ac9186e6f9e7e6c0a, type: 3}
   - {fileID: 3297491277670350401, guid: 92a808a05c32344498aed0df5163bf27, type: 3}
+  - {fileID: 6433795368364302602, guid: c428a231197af41a5872a268b6e88baa, type: 3}
   roomCount: 15
   maxAttempts: 100000
   branchChance: 1
@@ -482,7 +483,7 @@ MonoBehaviour:
   generateOnStart: 0
   recorder: {fileID: 2095877272}
   applyRoomUpgrades: 1
-  doorClosurePrefab: {fileID: 0}
+  doorClosurePrefab: {fileID: 3823408125251279848, guid: 732c3656819944d4bb85c8490ae2c67c, type: 3}
 --- !u!4 &2095877271
 Transform:
   m_ObjectHideFlags: 0
