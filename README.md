@@ -96,3 +96,7 @@ This is a learning project, and there are a few limitations:
 - It isn't a full gameplay system - there are no objectives, enemies or room-specific gameplay features included.
 
 Feel free to experiment with it and change things to suit your own project. If you spot an issue or have an idea, feedback is always welcome.
+
+## License
+
+This project is licensed under the MIT License.
